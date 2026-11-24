@@ -1085,6 +1085,24 @@ class StudyPlannerApp(tk.Tk):
         self.build_history_tab(history_tab)
         self.build_report_tab(report_tab)
         self.refresh_all()
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+    def on_tab_changed(self, event=None):
+        if not hasattr(self, 'notebook'):
+            return
+        try:
+            tab_idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            return
+        if tab_idx == 0:
+            self.refresh_tasks()
+            self.refresh_summary()
+        elif tab_idx == 1:
+            self.refresh_timer_tasks_dropdown(force_fresh=True)
+        elif tab_idx == 2:
+            self.refresh_continue_tab()
+        elif tab_idx == 3:
+            self.refresh_history()
 
     def logout(self):
         if self.timer_running:
@@ -1291,9 +1309,7 @@ class StudyPlannerApp(tk.Tk):
             return
 
         self.title_entry.delete(0, "end")
-        self.invalidate_priority_cache()
-        self.refresh_tasks()
-        self.refresh_summary()
+        self.refresh_all()
 
     def on_mark_done(self):
         task_id = self.selected_task_id()
@@ -1305,10 +1321,7 @@ class StudyPlannerApp(tk.Tk):
         except mysql.connector.Error as error:
             self.show_db_error(error)
             return
-        self.invalidate_priority_cache()
-        self.refresh_tasks()
-        self.refresh_summary()
-        self.refresh_continue_tab()
+        self.refresh_all()
 
     def on_undo_done(self):
         task_id = self.selected_task_id()
@@ -1319,9 +1332,7 @@ class StudyPlannerApp(tk.Tk):
         except mysql.connector.Error as error:
             self.show_db_error(error)
             return
-        self.invalidate_priority_cache()
-        self.refresh_tasks()
-        self.refresh_summary()
+        self.refresh_all()
 
     def on_delete(self):
         task_id = self.selected_task_id()
@@ -1336,10 +1347,7 @@ class StudyPlannerApp(tk.Tk):
         except mysql.connector.Error as error:
             self.show_db_error(error)
             return
-        self.invalidate_priority_cache()
-        self.refresh_tasks()
-        self.refresh_summary()
-        self.refresh_continue_tab()
+        self.refresh_all()
 
     def on_undo_delete(self):
         if not self.undo_stack:
@@ -1357,9 +1365,7 @@ class StudyPlannerApp(tk.Tk):
         except mysql.connector.Error as error:
             self.show_db_error(error)
             return
-        self.invalidate_priority_cache()
-        self.refresh_tasks()
-        self.refresh_summary()
+        self.refresh_all()
 
     def on_edit_task(self):
         task_id = self.selected_task_id()
@@ -1445,9 +1451,7 @@ class StudyPlannerApp(tk.Tk):
                 self.show_db_error(error)
                 return
 
-            self.invalidate_priority_cache()
-            self.refresh_tasks()
-            self.refresh_summary()
+            self.refresh_all()
             dialog.destroy()
 
         btn_frame = ttk.Frame(frame)
@@ -1482,7 +1486,10 @@ class StudyPlannerApp(tk.Tk):
         row1.pack(fill="x", pady=2)
 
         ttk.Label(row1, text="Select Task:").pack(side="left", padx=(0, 6))
-        self.timer_task_combo = ttk.Combobox(row1, state="readonly", width=50)
+        self.timer_task_combo = ttk.Combobox(
+            row1, state="readonly", width=50,
+            postcommand=lambda: self.refresh_timer_tasks_dropdown(force_fresh=True)
+        )
         self.timer_task_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.timer_task_combo.bind("<<ComboboxSelected>>", self.on_task_dropdown_selected)
 
@@ -1526,9 +1533,12 @@ class StudyPlannerApp(tk.Tk):
         ttk.Button(buttons, text="⏹ Stop",
                    command=self.on_stop_timer).pack(side="left", padx=6)
 
-    def refresh_timer_tasks_dropdown(self):
+    def refresh_timer_tasks_dropdown(self, force_fresh=False):
         if not hasattr(self, 'timer_task_combo'):
             return
+
+        if force_fresh:
+            self.invalidate_priority_cache()
 
         try:
             scored = self.get_cached_priorities()
