@@ -1251,6 +1251,7 @@ class StudyPlannerApp(tk.Tk):
         self.refresh_history()
         self.refresh_summary()
         self.refresh_continue_tab()
+        self.refresh_timer_tasks_dropdown()
 
     def refresh_summary(self):
         try:
@@ -1633,21 +1634,26 @@ class StudyPlannerApp(tk.Tk):
     # Study Timer tab
     # =====================================================================
     def build_timer_tab(self, parent):
-        # --- Top section: Start Highest Priority Task ---
-        top_frame = ttk.LabelFrame(parent, text="Quick Start", padding=8)
-        top_frame.pack(fill="x", pady=(0, 10))
+        # --- Task selection section with dropdown ---
+        choose_frame = ttk.LabelFrame(parent, text="Choose Task", padding=10)
+        choose_frame.pack(fill="x", pady=(0, 10))
 
-        ttk.Button(top_frame, text="⚡ Start Highest Priority Task",
+        row1 = ttk.Frame(choose_frame)
+        row1.pack(fill="x", pady=2)
+
+        ttk.Label(row1, text="Select Task:").pack(side="left", padx=(0, 6))
+        self.timer_task_combo = ttk.Combobox(row1, state="readonly", width=50)
+        self.timer_task_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.timer_task_combo.bind("<<ComboboxSelected>>", self.on_task_dropdown_selected)
+
+        ttk.Button(row1, text="⚡ Start Highest Priority Task",
                    command=self.on_start_highest_priority
-                   ).pack(side="left", padx=5)
-
-        # --- Task info panel ---
-        info_frame = ttk.LabelFrame(parent, text="Selected Task", padding=8)
-        info_frame.pack(fill="x", pady=(0, 10))
+                   ).pack(side="right")
 
         self.timer_task_info = tk.StringVar(value="No task selected")
-        ttk.Label(info_frame, textvariable=self.timer_task_info,
-                  wraplength=800, justify="left").pack(fill="x")
+        ttk.Label(choose_frame, textvariable=self.timer_task_info,
+                  wraplength=800, justify="left", font=("Helvetica", 10, "bold")
+                  ).pack(fill="x", pady=(6, 2))
 
         # --- Timer controls ---
         box = ttk.Frame(parent)
@@ -1682,7 +1688,66 @@ class StudyPlannerApp(tk.Tk):
         ttk.Button(buttons, text="⏹ Stop",
                    command=self.on_stop_timer).pack(side="left", padx=6)
 
-    def _load_task_into_timer(self, task):
+    def refresh_timer_tasks_dropdown(self):
+        """Populate the timer task dropdown with current pending tasks."""
+        if not hasattr(self, 'timer_task_combo'):
+            return
+
+        try:
+            scored = self.get_cached_priorities()
+        except Exception:
+            scored = []
+
+        self.timer_task_list = [t for t in scored if t[4] == "Pending"]
+
+        if not self.timer_task_list:
+            self.timer_task_combo['values'] = ["(No pending tasks)"]
+            self.timer_task_combo.set("(No pending tasks)")
+            self.timer_task_id = None
+            self.timer_task_info.set("No task selected")
+            return
+
+        values = [
+            f"Task: {t[2]}  |  Subject: {t[1]}  |  Score: {t[9]:.0f}"
+            for t in self.timer_task_list
+        ]
+        self.timer_task_combo['values'] = values
+
+        # Keep current selection if valid
+        if self.timer_task_id is not None:
+            found = False
+            for idx, t in enumerate(self.timer_task_list):
+                if t[0] == self.timer_task_id:
+                    self.timer_task_combo.current(idx)
+                    found = True
+                    break
+            if not found:
+                self.timer_task_id = None
+                self.timer_task_combo.set("Select a task from dropdown")
+                self.timer_task_info.set("No task selected")
+        else:
+            self.timer_task_combo.set("Select a task from dropdown")
+
+    def on_task_dropdown_selected(self, event=None):
+        """Handle user selecting a task from the dropdown."""
+        if self.timer_running:
+            messagebox.showinfo(
+                "Timer active",
+                "Stop the current timer before selecting a different task."
+            )
+            self.refresh_timer_tasks_dropdown()
+            return
+
+        idx = self.timer_task_combo.current()
+        if idx < 0 or idx >= len(getattr(self, 'timer_task_list', [])):
+            return
+
+        task = self.timer_task_list[idx]
+        task_tuple = (task[0], task[1], task[2], task[3], "Medium", task[4],
+                      task[5], task[6], task[7], task[8])
+        self._load_task_into_timer(task_tuple, score=task[9])
+
+    def _load_task_into_timer(self, task, score=None):
         """Load a task's details into the timer panel.
         task: (task_id, subject, title, due_date, priority, status,
                difficulty, estimated_minutes, created_at, completed_at)
@@ -1695,14 +1760,22 @@ class StudyPlannerApp(tk.Tk):
         self.timer_task_title = title
 
         # Get priority score
-        deficit_scores = calculate_subject_deficit_scores(self.connection, self.user_id)
-        deficit = deficit_scores.get(subject, 0)
-        est = estimated_minutes or DEFAULT_ESTIMATED_MINUTES
-        diff = difficulty or "Medium"
-        score = calculate_priority_score(due_date, est, diff, deficit)
+        if score is None:
+            deficit_scores = calculate_subject_deficit_scores(self.connection, self.user_id)
+            deficit = deficit_scores.get(subject, 0)
+            est = estimated_minutes or DEFAULT_ESTIMATED_MINUTES
+            diff = difficulty or "Medium"
+            score = calculate_priority_score(due_date, est, diff, deficit)
 
         info = f"Task: {title}  |  Subject: {subject}  |  Score: {score:.0f}"
         self.timer_task_info.set(info)
+
+        # Sync dropdown selection if it exists
+        if hasattr(self, 'timer_task_combo') and hasattr(self, 'timer_task_list'):
+            for idx, t in enumerate(self.timer_task_list):
+                if t[0] == task_id:
+                    self.timer_task_combo.current(idx)
+                    break
 
     def on_start_highest_priority(self):
         """Load the highest priority pending task into the timer."""
@@ -1731,7 +1804,7 @@ class StudyPlannerApp(tk.Tk):
         # Build a task tuple compatible with _load_task_into_timer
         task_tuple = (task_id, subject, title, due_date, "Medium", status,
                       difficulty, est_min, created_at, completed_at)
-        self._load_task_into_timer(task_tuple)
+        self._load_task_into_timer(task_tuple, score=score)
 
     def start_timer(self):
         if self.timer_running:
