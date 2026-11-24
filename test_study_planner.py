@@ -9,8 +9,6 @@ Run with: python test_study_planner.py
 
 import os
 import sys
-import pickle
-import shutil
 import time
 from datetime import date, datetime, timedelta
 
@@ -265,33 +263,33 @@ try:
         test("study_logs table exists", cursor.fetchone() is not None)
         cursor.execute("SHOW TABLES LIKE 'continue_sessions'")
         test("continue_sessions table exists", cursor.fetchone() is not None)
-        cursor.execute("SHOW TABLES LIKE 'migration_log'")
-        test("migration_log table exists", cursor.fetchone() is not None)
         cursor.close()
 
         # Re-run migration (idempotent test)
         try:
             sp.run_database_migrations(conn)
-            test("Migrations are idempotent", True)
+            test("Database initialization is idempotent", True)
         except Exception as e:
-            test("Migrations are idempotent", False, str(e))
+            test("Database initialization is idempotent", False, str(e))
 
-        # --- Create test users ---
-        section("USER ISOLATION TESTS")
+        # --- Create test users (plain text password) ---
+        section("USER ISOLATION & AUTHENTICATION TESTS")
         test_user1 = f"test_user_a_{int(time.time())}"
         test_user2 = f"test_user_b_{int(time.time())}"
 
         try:
             sp.register_user(conn, test_user1, "pass1234")
             sp.register_user(conn, test_user2, "pass5678")
-            test("Two test users created", True)
+            test("Two test users registered with plain password", True)
         except Exception as e:
-            test("Two test users created", False, str(e))
+            test("Two test users registered with plain password", False, str(e))
 
         uid1 = sp.login_user(conn, test_user1, "pass1234")
         uid2 = sp.login_user(conn, test_user2, "pass5678")
-        test("User 1 login succeeds", uid1 is not None)
-        test("User 2 login succeeds", uid2 is not None)
+        test("User 1 login succeeds with correct password", uid1 is not None)
+        test("User 2 login succeeds with correct password", uid2 is not None)
+        test("User 1 login fails with wrong password",
+             sp.login_user(conn, test_user1, "wrongpass") is None)
         test("Users have different IDs", uid1 != uid2)
 
         # --- Task CRUD ---
@@ -491,72 +489,6 @@ try:
         test("Report has insights", "insights" in report)
         test("On-time rate is 0-100",
              0 <= report["on_time_rate"] <= 100)
-
-        # --- Study Log Migration ---
-        section("STUDY LOG MIGRATION")
-
-        # Test migration of .dat file
-        test_dat = os.path.join(PROJECT_DIR, "test_migration.dat")
-        backup_dat = test_dat + ".backup"
-        try:
-            # Create a test .dat file
-            with open(test_dat, "wb") as f:
-                pickle.dump({
-                    "Username": test_user1,
-                    "Subject": "Physics",
-                    "Date/Time": "2026-01-15 10:30:00",
-                    "Seconds": 1200
-                }, f)
-                pickle.dump({
-                    "Username": test_user1,
-                    "Subject": "Maths",
-                    "Date/Time": "2026-01-16 14:00:00",
-                    "Seconds": 900
-                }, f)
-                pickle.dump({
-                    "Username": "nonexistent_user",
-                    "Subject": "Biology",
-                    "Date/Time": "2026-01-17 09:00:00",
-                    "Seconds": 600
-                }, f)
-
-            # Override LOG_FILE temporarily
-            original_log = sp.LOG_FILE
-            sp.LOG_FILE = test_dat
-
-            # Clear migration log for this test
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM migration_log WHERE migration_name = %s",
-                ("study_logs_dat_to_mysql",)
-            )
-            conn.commit()
-            cursor.close()
-
-            migrated, skipped, messages = sp.migrate_study_logs(conn)
-            test("Migration ran successfully", migrated >= 0)
-            test("Valid records migrated", migrated >= 2,
-                 f"migrated {migrated}")
-            test("Invalid records skipped (nonexistent user)", skipped >= 1,
-                 f"skipped {skipped}")
-            test("Backup created", os.path.exists(backup_dat))
-            test("Original file preserved", os.path.exists(test_dat))
-
-            # Test idempotence — run again
-            migrated2, skipped2, messages2 = sp.migrate_study_logs(conn)
-            test("Re-migration returns previous count",
-                 migrated2 == migrated,
-                 f"first: {migrated}, second: {migrated2}")
-            test("Re-migration message indicates already done",
-                 any("already" in m.lower() for m in messages2),
-                 f"messages: {messages2}")
-
-            sp.LOG_FILE = original_log
-        finally:
-            # Cleanup test files
-            for f in [test_dat, backup_dat]:
-                if os.path.exists(f):
-                    os.remove(f)
 
         # --- Summary ---
         section("SUMMARY FUNCTION")

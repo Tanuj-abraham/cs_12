@@ -3,13 +3,10 @@
 Python + Tkinter (screens) + MySQL (users, tasks, study logs).
 
 Upgraded with: automatic priority engine, task-based timer, weekly reports,
-continue-later sessions, study log migration from pickle to MySQL.
+and continue-later sessions.
 """
 
-import hashlib
 import os
-import pickle
-import shutil
 import time
 import tkinter as tk
 from datetime import date, datetime, timedelta
@@ -21,7 +18,6 @@ import mysql.connector
 # Settings
 # ---------------------------------------------------------------------------
 PROJECT_FOLDER = os.path.dirname(os.path.abspath(__file__))
-LOG_FILE = os.path.join(PROJECT_FOLDER, "study_logs.dat")
 
 DB_HOST = "localhost"
 DB_USER = "root"
@@ -114,20 +110,13 @@ def db_connect(password):
         return None, error
 
 
-def make_hash(password, salt):
-    """Turn a password into a SHA-256 hash so the real password is not stored."""
-    return hashlib.sha256((salt + password).encode()).hexdigest()
-
-
 def register_user(connection, username, password):
     """Add a new user. Raises IntegrityError if the username already exists."""
-    salt = os.urandom(8).hex()  # 16 random hex characters
     cursor = connection.cursor()
     try:
         cursor.execute(
-            "INSERT INTO users (username, salt, password_hash) "
-            "VALUES (%s, %s, %s)",
-            (username, salt, make_hash(password, salt))
+            "INSERT INTO users (username, password) VALUES (%s, %s)",
+            (username, password)
         )
         connection.commit()
     finally:
@@ -139,7 +128,7 @@ def login_user(connection, username, password):
     cursor = connection.cursor()
     try:
         cursor.execute(
-            "SELECT user_id, salt, password_hash FROM users WHERE username = %s",
+            "SELECT user_id, password FROM users WHERE username = %s",
             (username,)
         )
         row = cursor.fetchone()
@@ -148,8 +137,8 @@ def login_user(connection, username, password):
 
     if row is None:
         return None
-    user_id, salt, stored_hash = row
-    if make_hash(password, salt) == stored_hash:
+    user_id, stored_password = row
+    if password == stored_password:
         return user_id
     return None
 
@@ -209,9 +198,37 @@ def add_column_if_missing(connection, table_name, column_name, column_def):
     return False
 
 
-def run_database_migrations(connection):
-    """Run all schema migrations safely. Idempotent."""
+def init_database(connection):
+    """Ensure all required tables and columns exist in MySQL."""
+    # --- Ensure users table ---
+    ensure_table_exists(connection, "users", """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id  INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(50) NOT NULL UNIQUE,
+            password VARCHAR(100) NOT NULL
+        )
+    """)
+    add_column_if_missing(
+        connection, "users", "password", "VARCHAR(100) NOT NULL DEFAULT ''"
+    )
+
     # --- Ensure new columns on tasks table ---
+    ensure_table_exists(connection, "tasks", """
+        CREATE TABLE IF NOT EXISTS tasks (
+            task_id  INT AUTO_INCREMENT PRIMARY KEY,
+            user_id  INT          NOT NULL,
+            subject  VARCHAR(50)  NOT NULL,
+            title    VARCHAR(100) NOT NULL,
+            due_date DATE         NOT NULL,
+            priority ENUM('High', 'Medium', 'Low') NOT NULL DEFAULT 'Medium',
+            status   ENUM('Pending', 'Done')       NOT NULL DEFAULT 'Pending',
+            difficulty ENUM('Easy', 'Medium', 'Hard') NOT NULL DEFAULT 'Medium',
+            estimated_minutes INT DEFAULT 30,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME DEFAULT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """)
     add_column_if_missing(
         connection, "tasks", "difficulty",
         "ENUM('Easy', 'Medium', 'Hard') NOT NULL DEFAULT 'Medium'"
@@ -266,177 +283,9 @@ def run_database_migrations(connection):
         )
     """)
 
-    # --- Ensure migration_log table ---
-    ensure_table_exists(connection, "migration_log", """
-        CREATE TABLE IF NOT EXISTS migration_log (
-            migration_id    INT AUTO_INCREMENT PRIMARY KEY,
-            migration_name  VARCHAR(100) NOT NULL UNIQUE,
-            records_migrated INT DEFAULT 0,
-            migrated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
 
-
-# ---------------------------------------------------------------------------
-# Study log migration from .dat to MySQL
-# ---------------------------------------------------------------------------
-def migrate_study_logs(connection):
-    """Migrate study_logs.dat records to MySQL. Idempotent and safe.
-
-    Returns (migrated_count, skipped_count, error_messages).
-    """
-    migration_name = "study_logs_dat_to_mysql"
-
-    # Check if migration already completed
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            "SELECT records_migrated FROM migration_log WHERE migration_name = %s",
-            (migration_name,)
-        )
-        row = cursor.fetchone()
-        if row is not None:
-            return row[0], 0, ["Migration already completed previously."]
-    finally:
-        cursor.close()
-
-    if not os.path.exists(LOG_FILE):
-        # No legacy file — record that migration is done with 0 records
-        cursor = connection.cursor()
-        try:
-            cursor.execute(
-                "INSERT INTO migration_log (migration_name, records_migrated) "
-                "VALUES (%s, %s)",
-                (migration_name, 0)
-            )
-            connection.commit()
-        finally:
-            cursor.close()
-        return 0, 0, ["No study_logs.dat file found. Nothing to migrate."]
-
-    # Create backup before migration
-    backup_path = LOG_FILE + ".backup"
-    if not os.path.exists(backup_path):
-        shutil.copy2(LOG_FILE, backup_path)
-
-    # Read all legacy records
-    records = []
-    errors = []
-    try:
-        with open(LOG_FILE, "rb") as file:
-            while True:
-                try:
-                    record = pickle.load(file)
-                    records.append(record)
-                except EOFError:
-                    break
-                except (pickle.UnpicklingError, Exception) as err:
-                    errors.append(f"Could not read a record: {err}")
-    except OSError as err:
-        errors.append(f"Could not open study_logs.dat: {err}")
-        return 0, 0, errors
-
-    if not records:
-        cursor = connection.cursor()
-        try:
-            cursor.execute(
-                "INSERT INTO migration_log (migration_name, records_migrated) "
-                "VALUES (%s, %s)",
-                (migration_name, 0)
-            )
-            connection.commit()
-        finally:
-            cursor.close()
-        return 0, 0, ["study_logs.dat is empty. Nothing to migrate."]
-
-    migrated = 0
-    skipped = 0
-
-    for record in records:
-        try:
-            username = record.get("Username", "")
-            subject = record.get("Subject", "Other")
-            dt_str = record.get("Date/Time", "")
-            seconds = int(record.get("Seconds", 0))
-
-            if not username or not dt_str:
-                errors.append(f"Skipped record with missing username or datetime: {record}")
-                skipped += 1
-                continue
-
-            # Look up user_id
-            user_id = get_user_id_by_username(connection, username)
-            if user_id is None:
-                errors.append(
-                    f"Skipped record for unknown user '{username}': {record}"
-                )
-                skipped += 1
-                continue
-
-            # Parse datetime
-            try:
-                end_time = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                errors.append(f"Skipped record with bad datetime '{dt_str}': {record}")
-                skipped += 1
-                continue
-
-            start_time = end_time - timedelta(seconds=seconds)
-            session_date = end_time.date()
-
-            # Check for duplicate (same user, same end_time, same duration)
-            cursor = connection.cursor()
-            try:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM study_logs "
-                    "WHERE user_id = %s AND end_time = %s AND duration_seconds = %s "
-                    "AND subject = %s",
-                    (user_id, end_time, seconds, subject)
-                )
-                if cursor.fetchone()[0] > 0:
-                    skipped += 1
-                    continue
-            finally:
-                cursor.close()
-
-            # Insert the record
-            cursor = connection.cursor()
-            try:
-                cursor.execute(
-                    "INSERT INTO study_logs "
-                    "(user_id, task_id, subject, start_time, end_time, "
-                    "duration_seconds, session_date) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (user_id, None, subject, start_time, end_time,
-                     seconds, session_date)
-                )
-                connection.commit()
-                migrated += 1
-            finally:
-                cursor.close()
-
-        except Exception as err:
-            errors.append(f"Error migrating record {record}: {err}")
-            skipped += 1
-
-    # Record migration completion
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            "INSERT INTO migration_log (migration_name, records_migrated) "
-            "VALUES (%s, %s)",
-            (migration_name, migrated)
-        )
-        connection.commit()
-    finally:
-        cursor.close()
-
-    if migrated > 0:
-        errors.append(f"Successfully migrated {migrated} records to MySQL.")
-    if skipped > 0:
-        errors.append(f"Skipped {skipped} records (duplicates or unmappable).")
-
-    return migrated, skipped, errors
+# Alias for backward compatibility
+run_database_migrations = init_database
 
 
 # ---------------------------------------------------------------------------
@@ -1255,27 +1104,15 @@ class StudyPlannerApp(tk.Tk):
             return
         self.connection = connection
 
-        # Run database migrations
+        # Ensure database tables exist
         try:
-            run_database_migrations(connection)
+            init_database(connection)
         except mysql.connector.Error as error:
             messagebox.showerror(
-                "Migration error",
-                f"Could not update database schema:\n{error}"
+                "Database error",
+                f"Could not initialize database tables:\n{error}"
             )
             return
-
-        # Migrate study logs from .dat file
-        try:
-            migrated, skipped, messages = migrate_study_logs(connection)
-            if migrated > 0:
-                messagebox.showinfo(
-                    "Study Log Migration",
-                    f"Migrated {migrated} study session(s) from study_logs.dat "
-                    f"to MySQL.\n\nThe original file has been preserved."
-                )
-        except Exception as err:
-            print(f"Migration warning: {err}")
 
         self.show_login()
 
@@ -1857,23 +1694,14 @@ class StudyPlannerApp(tk.Tk):
         self.timer_subject = subject
         self.timer_task_title = title
 
-        # Get priority info
+        # Get priority score
         deficit_scores = calculate_subject_deficit_scores(self.connection, self.user_id)
         deficit = deficit_scores.get(subject, 0)
         est = estimated_minutes or DEFAULT_ESTIMATED_MINUTES
         diff = difficulty or "Medium"
         score = calculate_priority_score(due_date, est, diff, deficit)
-        label = get_priority_label(score)
 
-        # Get accumulated study time
-        total_studied = get_total_study_time_for_task(
-            self.connection, self.user_id, task_id
-        )
-
-        info = (f"📚 {title}  |  {subject}  |  Due: {due_date}  |  "
-                f"Difficulty: {diff}  |  Est: {est} min  |  "
-                f"Priority: {label} ({score:.0f})  |  "
-                f"Studied so far: {self.format_minutes(total_studied)}")
+        info = f"Task: {title}  |  Subject: {subject}  |  Score: {score:.0f}"
         self.timer_task_info.set(info)
 
     def on_start_highest_priority(self):

@@ -3,10 +3,9 @@ CREATE DATABASE IF NOT EXISTS StudyPlannerDB;
 USE StudyPlannerDB;
 
 CREATE TABLE IF NOT EXISTS users (
-    user_id       INT AUTO_INCREMENT PRIMARY KEY,
-    username      VARCHAR(50) NOT NULL UNIQUE,
-    salt          CHAR(16)    NOT NULL,
-    password_hash CHAR(64)    NOT NULL
+    user_id  INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50)  NOT NULL UNIQUE,
+    password VARCHAR(100) NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -24,7 +23,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
--- Study logs table (replaces study_logs.dat pickle file)
+-- Study logs table
 CREATE TABLE IF NOT EXISTS study_logs (
     log_id          INT AUTO_INCREMENT PRIMARY KEY,
     user_id         INT          NOT NULL,
@@ -55,12 +54,4 @@ CREATE TABLE IF NOT EXISTS continue_sessions (
     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
     UNIQUE KEY uq_continue_user_task (user_id, task_id),
     INDEX idx_continue_expires (expires_at)
-);
-
--- Migration tracking table
-CREATE TABLE IF NOT EXISTS migration_log (
-    migration_id    INT AUTO_INCREMENT PRIMARY KEY,
-    migration_name  VARCHAR(100) NOT NULL UNIQUE,
-    records_migrated INT DEFAULT 0,
-    migrated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 );
