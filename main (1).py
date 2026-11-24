@@ -1,11 +1,3 @@
-"""Study Planner - a CBSE Class 12 Computer Science project.
-
-Python + Tkinter (screens) + MySQL (users, tasks, study logs).
-
-Upgraded with: automatic priority engine, task-based timer, weekly reports,
-and continue-later sessions.
-"""
-
 import os
 import time
 import tkinter as tk
@@ -14,9 +6,6 @@ from tkinter import messagebox, ttk
 
 import mysql.connector
 
-# ---------------------------------------------------------------------------
-# Settings
-# ---------------------------------------------------------------------------
 PROJECT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 
 DB_HOST = "localhost"
@@ -28,40 +17,30 @@ SUBJECTS = ["Physics", "Chemistry", "Maths", "English",
 
 DIFFICULTIES = ["Easy", "Medium", "Hard"]
 
-# Legacy priority values kept for undo-delete compatibility
 PRIORITIES = ["High", "Medium", "Low"]
 
-# Continue-later expiry duration
 CONTINUE_EXPIRY_HOURS = 48
 
-# ---------------------------------------------------------------------------
-# Priority engine constants (centralized)
-# ---------------------------------------------------------------------------
-# Top-level weights (must sum to 1.0)
 WEIGHT_URGENCY = 0.60
 WEIGHT_DIFFICULTY = 0.30
 WEIGHT_DEFICIT = 0.10
 
-# Urgency sub-weights (must sum to 1.0)
 URGENCY_WEIGHT_DEADLINE = 0.60
 URGENCY_WEIGHT_LENGTH = 0.30
 URGENCY_WEIGHT_INTERACTION = 0.10
 
-# Deadline score mapping: (max_days_remaining, score)
-# Checked in order; first match wins
 DEADLINE_SCORE_MAP = [
-    (0, 100),     # Overdue or due today
-    (1, 90),      # 1 day
-    (2, 78),      # 2 days
-    (3, 68),      # 3 days
-    (5, 55),      # 4-5 days
-    (7, 42),      # 6-7 days
-    (14, 25),     # 8-14 days
-    (30, 12),     # 15-30 days
+    (0, 100),
+    (1, 90),
+    (2, 78),
+    (3, 68),
+    (5, 55),
+    (7, 42),
+    (14, 25),
+    (30, 12),
 ]
-DEADLINE_SCORE_DEFAULT = 5  # Over 30 days
+DEADLINE_SCORE_DEFAULT = 5
 
-# Length score anchor points for interpolation: (minutes, score)
 LENGTH_SCORE_ANCHORS = [
     (0, 0),
     (15, 5),
@@ -73,34 +52,26 @@ LENGTH_SCORE_ANCHORS = [
     (300, 100),
 ]
 
-# Difficulty score mapping
 DIFFICULTY_SCORES = {
     "Easy": 25,
     "Medium": 60,
     "Hard": 100,
 }
 
-# Priority label thresholds
 PRIORITY_LABEL_THRESHOLDS = [
     (70, "High"),
     (40, "Medium"),
     (0, "Low"),
 ]
 
-# Default estimated minutes for legacy tasks without estimates
 DEFAULT_ESTIMATED_MINUTES = 30
 
-# Subject workload weights
 WORKLOAD_WEIGHT_ESTIMATE = 0.80
 WORKLOAD_WEIGHT_COUNT = 0.20
-WORKLOAD_COUNT_MINUTES = 60  # Minutes per task for count component
+WORKLOAD_COUNT_MINUTES = 60
 
 
-# ---------------------------------------------------------------------------
-# PART 1: MySQL functions (users and tasks)
-# ---------------------------------------------------------------------------
 def db_connect(password):
-    """Connect to MySQL. Returns (connection, None) or (None, error)."""
     try:
         connection = mysql.connector.connect(
             host=DB_HOST, user=DB_USER, password=password, database=DB_NAME
@@ -111,7 +82,6 @@ def db_connect(password):
 
 
 def register_user(connection, username, password):
-    """Add a new user. Raises IntegrityError if the username already exists."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -124,7 +94,6 @@ def register_user(connection, username, password):
 
 
 def login_user(connection, username, password):
-    """Return the user_id if the login is correct, otherwise None."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -144,7 +113,6 @@ def login_user(connection, username, password):
 
 
 def get_user_id_by_username(connection, username):
-    """Look up a user_id from a username. Returns None if not found."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -156,11 +124,7 @@ def get_user_id_by_username(connection, username):
         cursor.close()
 
 
-# ---------------------------------------------------------------------------
-# Database migration helpers
-# ---------------------------------------------------------------------------
 def ensure_table_exists(connection, table_name, create_sql):
-    """Create a table if it does not already exist."""
     cursor = connection.cursor()
     try:
         cursor.execute(create_sql)
@@ -170,7 +134,6 @@ def ensure_table_exists(connection, table_name, create_sql):
 
 
 def column_exists(connection, table_name, column_name):
-    """Check whether a column exists in a table."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -184,7 +147,6 @@ def column_exists(connection, table_name, column_name):
 
 
 def add_column_if_missing(connection, table_name, column_name, column_def):
-    """Add a column to a table if it does not already exist."""
     if not column_exists(connection, table_name, column_name):
         cursor = connection.cursor()
         try:
@@ -199,8 +161,6 @@ def add_column_if_missing(connection, table_name, column_name, column_def):
 
 
 def init_database(connection):
-    """Ensure all required tables and columns exist in MySQL."""
-    # --- Ensure users table ---
     ensure_table_exists(connection, "users", """
         CREATE TABLE IF NOT EXISTS users (
             user_id  INT AUTO_INCREMENT PRIMARY KEY,
@@ -212,7 +172,6 @@ def init_database(connection):
         connection, "users", "password", "VARCHAR(100) NOT NULL DEFAULT ''"
     )
 
-    # --- Ensure new columns on tasks table ---
     ensure_table_exists(connection, "tasks", """
         CREATE TABLE IF NOT EXISTS tasks (
             task_id  INT AUTO_INCREMENT PRIMARY KEY,
@@ -246,7 +205,6 @@ def init_database(connection):
         "DATETIME DEFAULT NULL"
     )
 
-    # --- Ensure study_logs table ---
     ensure_table_exists(connection, "study_logs", """
         CREATE TABLE IF NOT EXISTS study_logs (
             log_id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -266,7 +224,6 @@ def init_database(connection):
         )
     """)
 
-    # --- Ensure continue_sessions table ---
     ensure_table_exists(connection, "continue_sessions", """
         CREATE TABLE IF NOT EXISTS continue_sessions (
             continue_id     INT AUTO_INCREMENT PRIMARY KEY,
@@ -284,16 +241,11 @@ def init_database(connection):
     """)
 
 
-# Alias for backward compatibility
 run_database_migrations = init_database
 
 
-# ---------------------------------------------------------------------------
-# Task CRUD functions
-# ---------------------------------------------------------------------------
 def add_task(connection, user_id, subject, title, due_date,
              difficulty="Medium", estimated_minutes=30, status="Pending"):
-    """Add a new task. Priority is now calculated automatically."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -310,7 +262,6 @@ def add_task(connection, user_id, subject, title, due_date,
 
 
 def get_tasks(connection, user_id, status_filter="All"):
-    """Return tasks with extended fields for priority calculation."""
     sql = ("SELECT task_id, subject, title, due_date, priority, status, "
            "difficulty, estimated_minutes, created_at, completed_at "
            "FROM tasks WHERE user_id = %s")
@@ -329,7 +280,6 @@ def get_tasks(connection, user_id, status_filter="All"):
 
 
 def get_task_row(connection, task_id, user_id):
-    """Fetch one task's full details."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -344,7 +294,6 @@ def get_task_row(connection, task_id, user_id):
 
 
 def get_task_detail(connection, task_id, user_id):
-    """Fetch one task's full details including all columns."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -360,7 +309,6 @@ def get_task_detail(connection, task_id, user_id):
 
 def update_task(connection, task_id, user_id, subject, title, due_date,
                 difficulty, estimated_minutes):
-    """Update a task's editable fields."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -414,7 +362,6 @@ def delete_task(connection, task_id, user_id):
 
 
 def get_summary(connection, user_id):
-    """Return (pending, overdue, done) task counts for the top bar."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -429,12 +376,8 @@ def get_summary(connection, user_id):
     return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
 
 
-# ---------------------------------------------------------------------------
-# Study log functions (MySQL)
-# ---------------------------------------------------------------------------
 def save_study_log(connection, user_id, task_id, subject, start_time,
                    end_time, duration_seconds):
-    """Save a study session to MySQL."""
     session_date = end_time.date() if isinstance(end_time, datetime) else date.today()
     cursor = connection.cursor()
     try:
@@ -453,7 +396,6 @@ def save_study_log(connection, user_id, task_id, subject, start_time,
 
 
 def get_study_logs(connection, user_id):
-    """Return all study logs for a user, newest first."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -469,7 +411,6 @@ def get_study_logs(connection, user_id):
 
 
 def get_study_logs_for_week(connection, user_id, week_start, week_end):
-    """Return study logs for a specific date range."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -486,7 +427,6 @@ def get_study_logs_for_week(connection, user_id, week_start, week_end):
 
 
 def get_today_study_seconds(connection, user_id):
-    """Get total seconds studied today."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -500,7 +440,6 @@ def get_today_study_seconds(connection, user_id):
 
 
 def get_total_study_time_for_task(connection, user_id, task_id):
-    """Get accumulated study time for a specific task."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -513,16 +452,11 @@ def get_total_study_time_for_task(connection, user_id, task_id):
         cursor.close()
 
 
-# ---------------------------------------------------------------------------
-# Continue-later session functions
-# ---------------------------------------------------------------------------
 def upsert_continue_session(connection, user_id, task_id, duration_seconds):
-    """Create or update a continue-later entry with refreshed expiry."""
     expires_at = datetime.now() + timedelta(hours=CONTINUE_EXPIRY_HOURS)
     now = datetime.now()
     cursor = connection.cursor()
     try:
-        # Try update first
         cursor.execute(
             "UPDATE continue_sessions SET last_session_end = %s, "
             "last_duration_seconds = %s, expires_at = %s "
@@ -530,7 +464,6 @@ def upsert_continue_session(connection, user_id, task_id, duration_seconds):
             (now, duration_seconds, expires_at, user_id, task_id)
         )
         if cursor.rowcount == 0:
-            # Insert new
             cursor.execute(
                 "INSERT INTO continue_sessions "
                 "(user_id, task_id, last_session_end, last_duration_seconds, expires_at) "
@@ -543,7 +476,6 @@ def upsert_continue_session(connection, user_id, task_id, duration_seconds):
 
 
 def remove_continue_session(connection, user_id, task_id):
-    """Remove a continue-later entry (task finished or manually removed)."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -556,7 +488,6 @@ def remove_continue_session(connection, user_id, task_id):
 
 
 def cleanup_expired_continue_sessions(connection, user_id):
-    """Remove expired continue-later entries."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -570,7 +501,6 @@ def cleanup_expired_continue_sessions(connection, user_id):
 
 
 def get_continue_sessions(connection, user_id):
-    """Get all active continue-later entries for a user with task details."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -590,22 +520,18 @@ def get_continue_sessions(connection, user_id):
         cursor.close()
 
 
-# ---------------------------------------------------------------------------
-# PART 2: Priority engine
-# ---------------------------------------------------------------------------
 def calculate_deadline_score(due_date):
-    """Calculate deadline score (0-100) based on days remaining."""
     today = date.today()
     if isinstance(due_date, datetime):
         due_date = due_date.date()
     days_remaining = (due_date - today).days
 
     if days_remaining <= 0:
-        return 100  # Overdue or due today
+        return 100
 
     for max_days, score in DEADLINE_SCORE_MAP:
         if max_days == 0:
-            continue  # Already handled above
+            continue
         if days_remaining <= max_days:
             return score
 
@@ -613,18 +539,12 @@ def calculate_deadline_score(due_date):
 
 
 def calculate_length_score(estimated_minutes):
-    """Calculate length score (0-100) using linear interpolation.
-
-    Invalid/missing estimates (None, 0, negative) use the default.
-    """
     if estimated_minutes is None or estimated_minutes <= 0:
         estimated_minutes = DEFAULT_ESTIMATED_MINUTES
 
-    # Clamp to max anchor
     if estimated_minutes >= LENGTH_SCORE_ANCHORS[-1][0]:
         return LENGTH_SCORE_ANCHORS[-1][1]
 
-    # Find the two anchor points to interpolate between
     for i in range(len(LENGTH_SCORE_ANCHORS) - 1):
         mins_lo, score_lo = LENGTH_SCORE_ANCHORS[i]
         mins_hi, score_hi = LENGTH_SCORE_ANCHORS[i + 1]
@@ -638,7 +558,6 @@ def calculate_length_score(estimated_minutes):
 
 
 def calculate_urgency_score(deadline_score, length_score):
-    """Combine deadline and length into a normalized urgency score (0-100)."""
     interaction = (deadline_score * length_score) / 100.0
     urgency = (URGENCY_WEIGHT_DEADLINE * deadline_score
                + URGENCY_WEIGHT_LENGTH * length_score
@@ -647,16 +566,12 @@ def calculate_urgency_score(deadline_score, length_score):
 
 
 def calculate_difficulty_score(difficulty):
-    """Map difficulty to a score (0-100)."""
     return DIFFICULTY_SCORES.get(difficulty, DIFFICULTY_SCORES["Medium"])
 
 
 def get_previous_week_range():
-    """Return (monday, sunday) dates for the previous completed calendar week."""
     today = date.today()
-    # Find last Monday: today.weekday() gives 0=Mon, 6=Sun
-    # Last Monday of *previous* week
-    days_since_monday = today.weekday()  # 0 for Monday
+    days_since_monday = today.weekday()
     this_monday = today - timedelta(days=days_since_monday)
     prev_monday = this_monday - timedelta(days=7)
     prev_sunday = prev_monday + timedelta(days=6)
@@ -664,16 +579,8 @@ def get_previous_week_range():
 
 
 def calculate_subject_deficit_scores(connection, user_id):
-    """Calculate subject deficit scores for all subjects.
-
-    Returns a dict: {subject: deficit_score (0-100)}
-    """
     prev_monday, prev_sunday = get_previous_week_range()
 
-    # Get tasks that existed during the previous week (eligible tasks)
-    # A task is eligible if:
-    # - created_at <= prev_sunday (existed by end of week)
-    # - completed_at is NULL or completed_at >= prev_monday (was pending at some point)
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -690,7 +597,6 @@ def calculate_subject_deficit_scores(connection, user_id):
     if not eligible_tasks:
         return {}
 
-    # Calculate workload per subject
     subject_workload = {}
     subject_task_count = {}
     for subject, est_mins, created_at, completed_at in eligible_tasks:
@@ -701,46 +607,40 @@ def calculate_subject_deficit_scores(connection, user_id):
     if not subject_workload:
         return {}
 
-    # Calculate workload weight per subject
     workload_weights = {}
     for subject in subject_workload:
         est_total = subject_workload[subject]
         count = subject_task_count[subject]
         weight = (WORKLOAD_WEIGHT_ESTIMATE * est_total
                   + WORKLOAD_WEIGHT_COUNT * (WORKLOAD_COUNT_MINUTES * count))
-        workload_weights[subject] = max(weight, 0.01)  # Ensure positive
+        workload_weights[subject] = max(weight, 0.01)
 
     total_workload = sum(workload_weights.values())
     if total_workload <= 0:
         return {}
 
-    # Calculate target shares
     target_shares = {
         s: w / total_workload for s, w in workload_weights.items()
     }
 
-    # Get actual study time per subject for previous week
     study_logs = get_study_logs_for_week(connection, user_id, prev_monday, prev_sunday)
 
     subject_study_time = {}
     for log in study_logs:
-        # log: (log_id, task_id, subject, start_time, end_time, duration_seconds, session_date)
         subject = log[2]
-        if subject in target_shares:  # Only count eligible subjects
+        if subject in target_shares:
             subject_study_time[subject] = (
                 subject_study_time.get(subject, 0) + log[5]
             )
 
     total_study = sum(subject_study_time.values())
 
-    # Calculate actual shares
     deficit_scores = {}
     for subject in target_shares:
         target = target_shares[subject]
         if total_study > 0:
             actual = subject_study_time.get(subject, 0) / total_study
         else:
-            # No study time at all — maximum deficit for all subjects
             actual = 0
 
         if target > 0:
@@ -756,7 +656,6 @@ def calculate_subject_deficit_scores(connection, user_id):
 
 def calculate_priority_score(due_date, estimated_minutes, difficulty,
                              subject_deficit_score):
-    """Calculate the final priority score (0-100) for a task."""
     deadline_score = calculate_deadline_score(due_date)
     length_score = calculate_length_score(estimated_minutes)
     urgency_score = calculate_urgency_score(deadline_score, length_score)
@@ -771,7 +670,6 @@ def calculate_priority_score(due_date, estimated_minutes, difficulty,
 
 
 def get_priority_label(score):
-    """Convert a numerical score to a priority label."""
     for threshold, label in PRIORITY_LABEL_THRESHOLDS:
         if score >= threshold:
             return label
@@ -779,17 +677,10 @@ def get_priority_label(score):
 
 
 def compute_all_priorities(connection, user_id):
-    """Calculate priorities for all pending tasks of a user.
-
-    Returns a list of (task_id, subject, title, due_date, status,
-    difficulty, estimated_minutes, created_at, completed_at,
-    priority_score, priority_label) sorted by priority descending.
-    """
     tasks = get_tasks(connection, user_id, "All")
     if not tasks:
         return []
 
-    # Pre-compute subject deficit scores (cached for all tasks)
     deficit_scores = calculate_subject_deficit_scores(connection, user_id)
 
     scored_tasks = []
@@ -806,7 +697,7 @@ def compute_all_priorities(connection, user_id):
                 due_date, est, diff, subject_deficit
             )
         else:
-            score = 0  # Completed tasks get 0
+            score = 0
 
         label = get_priority_label(score)
         scored_tasks.append((
@@ -815,13 +706,11 @@ def compute_all_priorities(connection, user_id):
             score, label
         ))
 
-    # Sort: pending first (by score desc, then due date asc, then est desc),
-    # then done tasks
     def sort_key(item):
         is_done = 0 if item[4] == "Pending" else 1
-        score = -item[9]  # Negative for descending
+        score = -item[9]
         due = item[3]
-        est = -(item[6] or 0)  # Negative for descending
+        est = -(item[6] or 0)
         return (is_done, score, due, est)
 
     scored_tasks.sort(key=sort_key)
@@ -829,29 +718,20 @@ def compute_all_priorities(connection, user_id):
 
 
 def get_highest_priority_task(connection, user_id):
-    """Return the highest-priority pending task, or None."""
     tasks = compute_all_priorities(connection, user_id)
     for task in tasks:
-        if task[4] == "Pending":  # status
+        if task[4] == "Pending":
             return task
     return None
 
 
-# ---------------------------------------------------------------------------
-# PART 3: Weekly report calculations
-# ---------------------------------------------------------------------------
 def get_weekly_report_data(connection, user_id):
-    """Calculate all weekly report metrics for the previous completed week.
-
-    Returns a dict with all report sections.
-    """
     prev_monday, prev_sunday = get_previous_week_range()
     report = {
         "week_start": prev_monday,
         "week_end": prev_sunday,
     }
 
-    # --- Study logs for the week ---
     logs = get_study_logs_for_week(connection, user_id, prev_monday, prev_sunday)
 
     total_seconds = sum(log[5] for log in logs)
@@ -862,18 +742,16 @@ def get_weekly_report_data(connection, user_id):
     report["total_sessions"] = total_sessions
     report["avg_session_seconds"] = avg_session
 
-    # --- Daily breakdown ---
     daily_seconds = {}
     for i in range(7):
         day = prev_monday + timedelta(days=i)
         daily_seconds[day] = 0
     for log in logs:
-        day = log[6]  # session_date
+        day = log[6]
         if day in daily_seconds:
             daily_seconds[day] += log[5]
     report["daily_seconds"] = daily_seconds
 
-    # --- Subject breakdown ---
     subject_seconds = {}
     for log in logs:
         subject = log[2]
@@ -881,7 +759,6 @@ def get_weekly_report_data(connection, user_id):
     report["subject_seconds"] = subject_seconds
     report["subjects_studied"] = len(subject_seconds)
 
-    # --- Tasks completed during the week ---
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -917,7 +794,6 @@ def get_weekly_report_data(connection, user_id):
         (tasks_on_time / tasks_completed * 100) if tasks_completed > 0 else 0
     )
 
-    # --- Subject workload for completed tasks ---
     subject_completed = {}
     subject_estimated = {}
     for task in completed_tasks:
@@ -928,7 +804,6 @@ def get_weekly_report_data(connection, user_id):
     report["subject_completed"] = subject_completed
     report["subject_estimated_minutes"] = subject_estimated
 
-    # --- Pending and overdue tasks ---
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -946,13 +821,10 @@ def get_weekly_report_data(connection, user_id):
     finally:
         cursor.close()
 
-    # --- Neglected subjects (using deficit model) ---
     deficit_scores = calculate_subject_deficit_scores(connection, user_id)
-    # Sort by deficit descending
     neglected = sorted(deficit_scores.items(), key=lambda x: -x[1])
     report["neglected_subjects"] = neglected
 
-    # --- Summary insights ---
     insights = []
     if subject_seconds:
         most_studied = max(subject_seconds, key=subject_seconds.get)
@@ -999,9 +871,6 @@ def get_weekly_report_data(connection, user_id):
     return report
 
 
-# ---------------------------------------------------------------------------
-# PART 4: Tkinter screens
-# ---------------------------------------------------------------------------
 class StudyPlannerApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -1012,7 +881,7 @@ class StudyPlannerApp(tk.Tk):
         self.connection = None
         self.user_id = None
         self.username = None
-        self.undo_stack = []      # a stack: deleted tasks wait here for Undo
+        self.undo_stack = []
 
         self.timer_running = False
         self.timer_job = None
@@ -1022,16 +891,14 @@ class StudyPlannerApp(tk.Tk):
         self.start_time = 0
         self.start_datetime = None
         self.total_seconds = 0
-        self.timer_session_saved = False  # Prevent duplicate saves
+        self.timer_session_saved = False
 
-        # Priority cache
         self._priority_cache = None
         self._priority_cache_time = 0
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.show_connect()
 
-    # ----- small helpers ---------------------------------------------------
     def clear_window(self):
         for widget in self.winfo_children():
             widget.destroy()
@@ -1040,12 +907,10 @@ class StudyPlannerApp(tk.Tk):
         messagebox.showerror("Database error", str(error))
 
     def invalidate_priority_cache(self):
-        """Mark priority cache as stale."""
         self._priority_cache = None
         self._priority_cache_time = 0
 
     def get_cached_priorities(self):
-        """Get priority data, using cache if fresh (< 2 seconds old)."""
         now = time.time()
         if (self._priority_cache is not None
                 and now - self._priority_cache_time < 2):
@@ -1061,7 +926,6 @@ class StudyPlannerApp(tk.Tk):
         return self._priority_cache
 
     def format_minutes(self, total_seconds):
-        """Format seconds as a readable duration string."""
         if total_seconds < 60:
             return f"{total_seconds}s"
         minutes = total_seconds // 60
@@ -1073,7 +937,6 @@ class StudyPlannerApp(tk.Tk):
             return f"{hours}h {mins}m"
         return f"{hours}h"
 
-    # ----- screen 1: connect to MySQL -------------------------------------
     def show_connect(self):
         self.clear_window()
         frame = ttk.Frame(self, padding=30)
@@ -1104,7 +967,6 @@ class StudyPlannerApp(tk.Tk):
             return
         self.connection = connection
 
-        # Ensure database tables exist
         try:
             init_database(connection)
         except mysql.connector.Error as error:
@@ -1116,7 +978,6 @@ class StudyPlannerApp(tk.Tk):
 
         self.show_login()
 
-    # ----- screen 2: login / register -------------------------------------
     def show_login(self):
         self.clear_window()
         frame = ttk.Frame(self, padding=30)
@@ -1181,7 +1042,6 @@ class StudyPlannerApp(tk.Tk):
         self.user_id = user_id
         self.username = username
 
-        # Cleanup expired continue sessions on login
         try:
             cleanup_expired_continue_sessions(self.connection, self.user_id)
         except mysql.connector.Error:
@@ -1189,7 +1049,6 @@ class StudyPlannerApp(tk.Tk):
 
         self.show_main()
 
-    # ----- screen 3: main window with tabs --------------------------------
     def show_main(self):
         self.clear_window()
         self.undo_stack = []
@@ -1270,21 +1129,16 @@ class StudyPlannerApp(tk.Tk):
             f"     Studied today: {seconds_today // 60} min"
         )
 
-    # =====================================================================
-    # Tasks tab
-    # =====================================================================
     def build_tasks_tab(self, parent):
         form = ttk.LabelFrame(parent, text="Add a task", padding=8)
         form.pack(fill="x")
 
-        # Row 0: Labels
         ttk.Label(form, text="Subject").grid(row=0, column=0, sticky="w")
         ttk.Label(form, text="Task").grid(row=0, column=1, sticky="w")
         ttk.Label(form, text="Due (YYYY-MM-DD)").grid(row=0, column=2, sticky="w")
         ttk.Label(form, text="Difficulty").grid(row=0, column=3, sticky="w")
         ttk.Label(form, text="Est. min").grid(row=0, column=4, sticky="w")
 
-        # Row 1: Inputs
         self.subject_box = ttk.Combobox(form, values=SUBJECTS, width=15)
         self.subject_box.set(SUBJECTS[0])
         self.title_entry = ttk.Entry(form, width=25)
@@ -1306,7 +1160,6 @@ class StudyPlannerApp(tk.Tk):
                    ).grid(row=1, column=5, pady=3)
         self.title_entry.bind("<Return>", lambda event: self.on_add_task())
 
-        # Filter row
         filter_row = ttk.Frame(parent)
         filter_row.pack(fill="x", pady=(10, 4))
         ttk.Label(filter_row, text="Show:").pack(side="left")
@@ -1318,7 +1171,6 @@ class StudyPlannerApp(tk.Tk):
         ttk.Label(filter_row, text="(red = overdue, grey = done)"
                   ).pack(side="left", padx=10)
 
-        # Task table with priority columns
         table = ttk.Frame(parent)
         table.pack(fill="both", expand=True)
         columns = ("subject", "title", "due", "difficulty", "est_min",
@@ -1347,7 +1199,6 @@ class StudyPlannerApp(tk.Tk):
         self.task_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Buttons row
         buttons = ttk.Frame(parent)
         buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(buttons, text="Mark as Done", command=self.on_mark_done).pack(
@@ -1378,7 +1229,6 @@ class StudyPlannerApp(tk.Tk):
         for (task_id, subject, title, due_date, status,
              difficulty, est_min, created_at, completed_at,
              score, label) in scored:
-            # Apply filter
             if status_filter == "Pending" and status != "Pending":
                 continue
             if status_filter == "Done" and status != "Done":
@@ -1451,7 +1301,6 @@ class StudyPlannerApp(tk.Tk):
             return
         try:
             mark_task_done(self.connection, task_id, self.user_id)
-            # Remove from continue sessions if present
             remove_continue_session(self.connection, self.user_id, task_id)
         except mysql.connector.Error as error:
             self.show_db_error(error)
@@ -1481,8 +1330,7 @@ class StudyPlannerApp(tk.Tk):
         try:
             row = get_task_row(self.connection, task_id, self.user_id)
             if row is not None:
-                self.undo_stack.append(row)       # push
-                # Remove continue session for this task
+                self.undo_stack.append(row)
                 remove_continue_session(self.connection, self.user_id, task_id)
                 delete_task(self.connection, task_id, self.user_id)
         except mysql.connector.Error as error:
@@ -1497,8 +1345,7 @@ class StudyPlannerApp(tk.Tk):
         if not self.undo_stack:
             messagebox.showinfo("Nothing to undo", "No deleted tasks to bring back.")
             return
-        row = self.undo_stack.pop()   # pop
-        # row has 7 fields: subject, title, due, priority, status, difficulty, est_min
+        row = self.undo_stack.pop()
         subject, title, due = row[0], row[1], row[2]
         status = row[4] if len(row) > 4 else "Pending"
         difficulty = row[5] if len(row) > 5 else "Medium"
@@ -1515,7 +1362,6 @@ class StudyPlannerApp(tk.Tk):
         self.refresh_summary()
 
     def on_edit_task(self):
-        """Open an edit dialog for the selected task."""
         task_id = self.selected_task_id()
         if task_id is None:
             return
@@ -1531,7 +1377,6 @@ class StudyPlannerApp(tk.Tk):
         (tid, subject, title, due_date, priority, status,
          difficulty, estimated_minutes, created_at, completed_at) = task
 
-        # Create edit dialog
         dialog = tk.Toplevel(self)
         dialog.title("Edit Task")
         dialog.geometry("400x320")
@@ -1611,7 +1456,6 @@ class StudyPlannerApp(tk.Tk):
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="left", padx=5)
 
     def on_study_task(self):
-        """Switch to timer tab with the selected task pre-loaded."""
         task_id = self.selected_task_id()
         if task_id is None:
             return
@@ -1628,13 +1472,9 @@ class StudyPlannerApp(tk.Tk):
             return
 
         self._load_task_into_timer(task)
-        self.notebook.select(1)  # Switch to timer tab
+        self.notebook.select(1)
 
-    # =====================================================================
-    # Study Timer tab
-    # =====================================================================
     def build_timer_tab(self, parent):
-        # --- Task selection section with dropdown ---
         choose_frame = ttk.LabelFrame(parent, text="Choose Task", padding=10)
         choose_frame.pack(fill="x", pady=(0, 10))
 
@@ -1655,7 +1495,6 @@ class StudyPlannerApp(tk.Tk):
                   wraplength=800, justify="left", font=("Helvetica", 10, "bold")
                   ).pack(fill="x", pady=(6, 2))
 
-        # --- Timer controls ---
         box = ttk.Frame(parent)
         box.pack(expand=True)
 
@@ -1666,7 +1505,6 @@ class StudyPlannerApp(tk.Tk):
         self.minutes_box.set(25)
         self.minutes_box.pack(side="left", padx=5)
 
-        # Preset buttons
         preset_row = ttk.Frame(box)
         preset_row.pack(pady=3)
         for mins in [25, 45, 60, 90]:
@@ -1689,7 +1527,6 @@ class StudyPlannerApp(tk.Tk):
                    command=self.on_stop_timer).pack(side="left", padx=6)
 
     def refresh_timer_tasks_dropdown(self):
-        """Populate the timer task dropdown with current pending tasks."""
         if not hasattr(self, 'timer_task_combo'):
             return
 
@@ -1713,7 +1550,6 @@ class StudyPlannerApp(tk.Tk):
         ]
         self.timer_task_combo['values'] = values
 
-        # Keep current selection if valid
         if self.timer_task_id is not None:
             found = False
             for idx, t in enumerate(self.timer_task_list):
@@ -1729,7 +1565,6 @@ class StudyPlannerApp(tk.Tk):
             self.timer_task_combo.set("Select a task from dropdown")
 
     def on_task_dropdown_selected(self, event=None):
-        """Handle user selecting a task from the dropdown."""
         if self.timer_running:
             messagebox.showinfo(
                 "Timer active",
@@ -1748,10 +1583,6 @@ class StudyPlannerApp(tk.Tk):
         self._load_task_into_timer(task_tuple, score=task[9])
 
     def _load_task_into_timer(self, task, score=None):
-        """Load a task's details into the timer panel.
-        task: (task_id, subject, title, due_date, priority, status,
-               difficulty, estimated_minutes, created_at, completed_at)
-        """
         (task_id, subject, title, due_date, priority, status,
          difficulty, estimated_minutes, created_at, completed_at) = task
 
@@ -1759,7 +1590,6 @@ class StudyPlannerApp(tk.Tk):
         self.timer_subject = subject
         self.timer_task_title = title
 
-        # Get priority score
         if score is None:
             deficit_scores = calculate_subject_deficit_scores(self.connection, self.user_id)
             deficit = deficit_scores.get(subject, 0)
@@ -1770,7 +1600,6 @@ class StudyPlannerApp(tk.Tk):
         info = f"Task: {title}  |  Subject: {subject}  |  Score: {score:.0f}"
         self.timer_task_info.set(info)
 
-        # Sync dropdown selection if it exists
         if hasattr(self, 'timer_task_combo') and hasattr(self, 'timer_task_list'):
             for idx, t in enumerate(self.timer_task_list):
                 if t[0] == task_id:
@@ -1778,7 +1607,6 @@ class StudyPlannerApp(tk.Tk):
                     break
 
     def on_start_highest_priority(self):
-        """Load the highest priority pending task into the timer."""
         if self.timer_running:
             messagebox.showinfo("Timer active",
                                 "Stop the current timer before starting a new task.")
@@ -1794,14 +1622,10 @@ class StudyPlannerApp(tk.Tk):
             messagebox.showinfo("No tasks", "No pending tasks found.")
             return
 
-        # task from compute_all_priorities:
-        # (task_id, subject, title, due_date, status, difficulty, est_min,
-        #  created_at, completed_at, score, label)
         (task_id, subject, title, due_date, status,
          difficulty, est_min, created_at, completed_at,
          score, label) = task
 
-        # Build a task tuple compatible with _load_task_into_timer
         task_tuple = (task_id, subject, title, due_date, "Medium", status,
                       difficulty, est_min, created_at, completed_at)
         self._load_task_into_timer(task_tuple, score=score)
@@ -1818,7 +1642,6 @@ class StudyPlannerApp(tk.Tk):
             )
             return
 
-        # Verify task still exists and is pending
         try:
             task = get_task_detail(
                 self.connection, self.timer_task_id, self.user_id
@@ -1870,18 +1693,15 @@ class StudyPlannerApp(tk.Tk):
             self.timer_job = self.after(500, self.tick)
 
     def on_timer_complete(self):
-        """Called when timer reaches zero naturally."""
         self.bell()
         self._stop_timer_and_choose()
 
     def on_stop_timer(self):
-        """Called when user presses Stop."""
         if not self.timer_running:
             return
         self._stop_timer_and_choose()
 
     def _stop_timer_and_choose(self):
-        """Stop the timer and present Finished / Continue Later options."""
         if not self.timer_running:
             return
         if self.timer_job is not None:
@@ -1896,13 +1716,12 @@ class StudyPlannerApp(tk.Tk):
             self.timer_status.set("Session too short to save.")
             return
 
-        # Show choice dialog
         dialog = tk.Toplevel(self)
         dialog.title("Session Complete")
         dialog.geometry("420x220")
         dialog.transient(self)
         dialog.grab_set()
-        dialog.protocol("WM_DELETE_WINDOW", lambda: None)  # Prevent closing without choice
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
 
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill="both", expand=True)
@@ -1934,15 +1753,10 @@ class StudyPlannerApp(tk.Tk):
                    command=on_continue).pack(side="left", padx=10)
 
     def finish_timer(self, action="continue", elapsed=None, quiet=False):
-        """Save study session and handle task state.
-
-        action: 'finished' or 'continue'
-        """
         if self.timer_session_saved:
-            return  # Prevent duplicate saves
+            return
         self.timer_session_saved = True
 
-        # Stop timer if still running (e.g., from logout/close)
         if self.timer_running:
             if self.timer_job is not None:
                 self.after_cancel(self.timer_job)
@@ -1956,14 +1770,12 @@ class StudyPlannerApp(tk.Tk):
         if elapsed < 1:
             return
 
-        # Calculate timestamps
         end_datetime = datetime.now()
         if self.start_datetime:
             start_dt = self.start_datetime
         else:
             start_dt = end_datetime - timedelta(seconds=elapsed)
 
-        # Save study log to MySQL
         try:
             save_study_log(
                 self.connection, self.user_id, self.timer_task_id,
@@ -1976,7 +1788,6 @@ class StudyPlannerApp(tk.Tk):
         task_id = self.timer_task_id
 
         if action == "finished" and task_id is not None:
-            # Mark task as done
             try:
                 mark_task_done(self.connection, task_id, self.user_id)
                 remove_continue_session(self.connection, self.user_id, task_id)
@@ -1984,7 +1795,6 @@ class StudyPlannerApp(tk.Tk):
                 if not quiet:
                     self.show_db_error(error)
         elif action == "continue" and task_id is not None:
-            # Keep task pending, add/update continue session
             try:
                 upsert_continue_session(
                     self.connection, self.user_id, task_id, elapsed
@@ -1993,7 +1803,6 @@ class StudyPlannerApp(tk.Tk):
                 if not quiet:
                     self.show_db_error(error)
 
-        # Reset timer display
         self.timer_text.set(f"{self.total_seconds // 60:02d}:00")
         if action == "finished":
             self.timer_status.set("Task completed! Select a new task to study.")
@@ -2020,9 +1829,6 @@ class StudyPlannerApp(tk.Tk):
                 )
             self.refresh_all()
 
-    # =====================================================================
-    # Continue Previous Sessions tab
-    # =====================================================================
     def build_continue_tab(self, parent):
         ttk.Label(parent, text="Tasks you paused — resume within 48 hours",
                   font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(0, 8))
@@ -2069,14 +1875,12 @@ class StudyPlannerApp(tk.Tk):
             self.continue_tree.delete(item)
 
         try:
-            # Cleanup expired entries first
             cleanup_expired_continue_sessions(self.connection, self.user_id)
             sessions = get_continue_sessions(self.connection, self.user_id)
         except mysql.connector.Error as error:
             self.show_db_error(error)
             return
 
-        # Get priority data
         deficit_scores = calculate_subject_deficit_scores(self.connection, self.user_id)
 
         now = datetime.now()
@@ -2085,14 +1889,12 @@ class StudyPlannerApp(tk.Tk):
              expires_at, subject, title, due_date, difficulty,
              estimated_minutes, status) = session
 
-            # Calculate priority
             est = estimated_minutes or DEFAULT_ESTIMATED_MINUTES
             diff = difficulty or "Medium"
             deficit = deficit_scores.get(subject, 0)
             score = calculate_priority_score(due_date, est, diff, deficit)
             label = get_priority_label(score)
 
-            # Calculate total study time for this task
             try:
                 total_secs = get_total_study_time_for_task(
                     self.connection, self.user_id, task_id
@@ -2100,7 +1902,6 @@ class StudyPlannerApp(tk.Tk):
             except mysql.connector.Error:
                 total_secs = 0
 
-            # Calculate expires_in
             if expires_at > now:
                 remaining = expires_at - now
                 hours_left = remaining.total_seconds() / 3600
@@ -2123,7 +1924,6 @@ class StudyPlannerApp(tk.Tk):
             )
 
     def on_continue_studying(self):
-        """Resume studying the selected continue-later task."""
         selection = self.continue_tree.selection()
         if not selection:
             messagebox.showinfo("Select a task",
@@ -2147,11 +1947,8 @@ class StudyPlannerApp(tk.Tk):
             return
 
         self._load_task_into_timer(task)
-        self.notebook.select(1)  # Switch to timer tab
+        self.notebook.select(1)
 
-    # =====================================================================
-    # History tab
-    # =====================================================================
     def build_history_tab(self, parent):
         self.totals_var = tk.StringVar()
         ttk.Label(parent, textvariable=self.totals_var, wraplength=800,
@@ -2187,8 +1984,6 @@ class StudyPlannerApp(tk.Tk):
 
         totals = {}
         for log in logs:
-            # (log_id, task_id, subject, start_time, end_time,
-            #  duration_seconds, session_date)
             subject = log[2]
             seconds = log[5]
             end_time = log[4]
@@ -2196,13 +1991,12 @@ class StudyPlannerApp(tk.Tk):
 
             totals[subject] = totals.get(subject, 0) + seconds
 
-            # Try to get task name
             task_name = ""
             if task_id:
                 try:
                     task = get_task_detail(self.connection, task_id, self.user_id)
                     if task:
-                        task_name = task[2]  # title
+                        task_name = task[2]
                 except mysql.connector.Error:
                     pass
 
@@ -2220,11 +2014,7 @@ class StudyPlannerApp(tk.Tk):
                                      for name, secs in sorted(totals.items()))
         self.totals_var.set(f"Total: {overall} min     {per_subject}")
 
-    # =====================================================================
-    # Weekly Report tab
-    # =====================================================================
     def build_report_tab(self, parent):
-        # Scrollable frame for the report
         canvas = tk.Canvas(parent, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         self.report_frame = ttk.Frame(canvas)
@@ -2240,12 +2030,10 @@ class StudyPlannerApp(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Mouse wheel scrolling
         def on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         canvas.bind_all("<MouseWheel>", on_mousewheel)
 
-        # Generate report button
         btn_frame = ttk.Frame(self.report_frame)
         btn_frame.pack(fill="x", pady=(0, 10))
         ttk.Button(btn_frame, text="📊 Generate Weekly Report",
@@ -2255,8 +2043,6 @@ class StudyPlannerApp(tk.Tk):
         self.report_content_frame.pack(fill="both", expand=True)
 
     def generate_weekly_report(self):
-        """Generate and display the weekly report."""
-        # Clear previous content
         for widget in self.report_content_frame.winfo_children():
             widget.destroy()
 
@@ -2268,7 +2054,6 @@ class StudyPlannerApp(tk.Tk):
 
         frame = self.report_content_frame
 
-        # --- Header ---
         week_start = report["week_start"]
         week_end = report["week_end"]
         ttk.Label(frame,
@@ -2276,7 +2061,6 @@ class StudyPlannerApp(tk.Tk):
                        f"{week_end.strftime('%b %d, %Y')}",
                   font=("Helvetica", 13, "bold")).pack(anchor="w", pady=(0, 10))
 
-        # --- Overall Statistics ---
         stats_frame = ttk.LabelFrame(frame, text="Overall Statistics", padding=10)
         stats_frame.pack(fill="x", pady=(0, 10))
 
@@ -2295,7 +2079,6 @@ class StudyPlannerApp(tk.Tk):
         ttk.Label(stats_frame, text=stats_text, wraplength=800,
                   justify="left").pack(anchor="w")
 
-        # --- Daily Breakdown with Canvas Chart ---
         daily_frame = ttk.LabelFrame(frame, text="Daily Breakdown", padding=10)
         daily_frame.pack(fill="x", pady=(0, 10))
 
@@ -2305,7 +2088,6 @@ class StudyPlannerApp(tk.Tk):
 
         if any(v > 0 for v in daily.values()):
             max_val = max(daily.values())
-            # Draw bar chart using Canvas
             chart_canvas = tk.Canvas(daily_frame, width=700, height=180,
                                      bg="white", highlightthickness=1,
                                      highlightbackground="#ccc")
@@ -2329,19 +2111,16 @@ class StudyPlannerApp(tk.Tk):
                 else:
                     bar_h = 0
 
-                # Bar
                 if bar_h > 0:
                     chart_canvas.create_rectangle(
                         x, bottom - bar_h, x + bar_width, bottom,
                         fill="#4682B4", outline="#2c5f8a"
                     )
-                    # Value on top
                     chart_canvas.create_text(
                         x + bar_width // 2, bottom - bar_h - 8,
                         text=f"{mins}m", font=("Helvetica", 8)
                     )
 
-                # Day label
                 day_name = day_names[i] if i < len(day_names) else str(day)
                 chart_canvas.create_text(
                     x + bar_width // 2, bottom + 10,
@@ -2351,7 +2130,6 @@ class StudyPlannerApp(tk.Tk):
             ttk.Label(daily_frame, text="No study sessions during this week."
                       ).pack(anchor="w")
 
-        # --- Subject Breakdown ---
         subj_frame = ttk.LabelFrame(frame, text="Subject Breakdown", padding=10)
         subj_frame.pack(fill="x", pady=(0, 10))
 
@@ -2375,7 +2153,6 @@ class StudyPlannerApp(tk.Tk):
             subj_tree.column("completed", width=80)
             subj_tree.column("workload", width=100)
 
-            # Combine all subjects from study + completion data
             all_subjects = set(subject_seconds.keys()) | set(
                 report.get("subject_completed", {}).keys()
             )
@@ -2393,7 +2170,6 @@ class StudyPlannerApp(tk.Tk):
             ttk.Label(subj_frame, text="No subjects studied this week."
                       ).pack(anchor="w")
 
-        # --- Neglected Subjects ---
         neglect_frame = ttk.LabelFrame(frame, text="Subject Attention Needed",
                                        padding=10)
         neglect_frame.pack(fill="x", pady=(0, 10))
@@ -2414,7 +2190,6 @@ class StudyPlannerApp(tk.Tk):
                       text="✅ No subjects significantly neglected."
                       ).pack(anchor="w")
 
-        # --- Task Status ---
         task_frame = ttk.LabelFrame(frame, text="Task Status", padding=10)
         task_frame.pack(fill="x", pady=(0, 10))
 
@@ -2424,7 +2199,6 @@ class StudyPlannerApp(tk.Tk):
         )
         ttk.Label(task_frame, text=task_text).pack(anchor="w")
 
-        # --- Insights ---
         insights_frame = ttk.LabelFrame(frame, text="Weekly Insights", padding=10)
         insights_frame.pack(fill="x", pady=(0, 10))
 

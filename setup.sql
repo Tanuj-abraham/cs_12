@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
--- Study logs table
 CREATE TABLE IF NOT EXISTS study_logs (
     log_id          INT AUTO_INCREMENT PRIMARY KEY,
     user_id         INT          NOT NULL,
@@ -41,7 +40,6 @@ CREATE TABLE IF NOT EXISTS study_logs (
     INDEX idx_study_logs_subject (subject)
 );
 
--- Continue-later sessions table
 CREATE TABLE IF NOT EXISTS continue_sessions (
     continue_id     INT AUTO_INCREMENT PRIMARY KEY,
     user_id         INT          NOT NULL,
